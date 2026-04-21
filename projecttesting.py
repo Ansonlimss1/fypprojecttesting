@@ -1,5 +1,6 @@
 import re
 from typing import Dict, List, Optional
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -507,21 +508,98 @@ def filter_cars(max_budget: int, seats_needed: int, car_type: str) -> List[Dict]
     return sorted(results, key=lambda x: (x["price_rm"], -x["fuel_economy_km_l"]))
 
 
+def default_welcome_message() -> str:
+    return (
+        "Welcome to MyCar Advisor Malaysia. Ask me about car details, comparisons, why a car suits you, driving-use recommendations, seat-based suggestions, or maintenance tips."
+    )
+
+
+def build_chat_title(messages: List[Dict]) -> str:
+    for message in messages:
+        if message["role"] == "user":
+            title = message["content"].strip()
+            return title[:40] + "..." if len(title) > 40 else title
+    return "New chat"
+
+
+def create_chat_session(messages: Optional[List[Dict]] = None) -> Dict:
+    session_messages = messages or [{"role": "assistant", "content": default_welcome_message()}]
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    chat_id = st.session_state.next_chat_id
+    st.session_state.next_chat_id += 1
+    return {
+        "id": chat_id,
+        "title": build_chat_title(session_messages),
+        "timestamp": timestamp,
+        "messages": [dict(message) for message in session_messages],
+    }
+
+
+def sync_active_chat_session() -> None:
+    active_chat_id = st.session_state.current_chat_id
+    for chat in st.session_state.chat_sessions:
+        if chat["id"] == active_chat_id:
+            chat["messages"] = [dict(message) for message in st.session_state.messages]
+            chat["title"] = build_chat_title(chat["messages"])
+            chat["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            break
+
+
+def start_new_chat() -> None:
+    new_chat = create_chat_session()
+    st.session_state.chat_sessions.insert(0, new_chat)
+    st.session_state.current_chat_id = new_chat["id"]
+    st.session_state.messages = [dict(message) for message in new_chat["messages"]]
+
+
+def load_chat(chat_id: int) -> None:
+    for chat in st.session_state.chat_sessions:
+        if chat["id"] == chat_id:
+            st.session_state.current_chat_id = chat_id
+            st.session_state.messages = [dict(message) for message in chat["messages"]]
+            break
+
+
+def clear_chat_history() -> None:
+    st.session_state.chat_sessions = []
+    start_new_chat()
+
+
 def initialize_session() -> None:
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {
-                "role": "assistant",
-                "content": (
-                    "Welcome to MyCar Advisor Malaysia. Ask me about car details, comparisons, why a car suits you, driving-use recommendations, seat-based suggestions, or maintenance tips."
-                ),
-            }
-        ]
+    if "next_chat_id" not in st.session_state:
+        st.session_state.next_chat_id = 1
+    if "chat_sessions" not in st.session_state:
+        first_chat = create_chat_session()
+        st.session_state.chat_sessions = [first_chat]
+        st.session_state.current_chat_id = first_chat["id"]
+        st.session_state.messages = [dict(message) for message in first_chat["messages"]]
+    elif "messages" not in st.session_state or "current_chat_id" not in st.session_state:
+        latest_chat = st.session_state.chat_sessions[0]
+        st.session_state.current_chat_id = latest_chat["id"]
+        st.session_state.messages = [dict(message) for message in latest_chat["messages"]]
 
 
 def sidebar_ui() -> None:
     st.sidebar.title("MyCar Advisor Malaysia")
     st.sidebar.caption("FYP Streamlit chatbot for Malaysian car owners")
+
+    st.sidebar.subheader("Chat history")
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("New chat", use_container_width=True):
+            start_new_chat()
+            st.rerun()
+    with col2:
+        if st.button("Clear history", use_container_width=True):
+            clear_chat_history()
+            st.rerun()
+
+    for chat in st.session_state.chat_sessions:
+        button_label = f"{chat['title']}\n{chat['timestamp']}"
+        button_type = "primary" if chat["id"] == st.session_state.current_chat_id else "secondary"
+        if st.sidebar.button(button_label, key=f"chat_{chat['id']}", use_container_width=True, type=button_type):
+            load_chat(chat["id"])
+            st.rerun()
 
     max_budget = st.sidebar.slider("Maximum budget (RM)", 40000, 150000, 90000, 5000)
     seats_needed = st.sidebar.selectbox("Minimum seats", [4, 5, 7], index=1)
@@ -573,6 +651,7 @@ def main_ui() -> None:
 
             response = get_chatbot_response(user_prompt)
             st.session_state.messages.append({"role": "assistant", "content": response})
+            sync_active_chat_session()
             with st.chat_message("assistant"):
                 st.markdown(response)
 
